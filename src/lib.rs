@@ -1,4 +1,9 @@
-use pyo3::prelude::*;
+use pyo3::{
+    prelude::*,
+    types::{PyString, PyTuple},
+};
+
+use std::ops::ControlFlow;
 
 #[pymodule]
 fn diggity(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -13,38 +18,142 @@ fn diggity(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// - `default`: An optional default value to return if the path is not found.
 /// - `sep`: An optional string to specify the separator used in the path (default is ".").
 #[pyfunction]
-#[pyo3(signature = (obj, path, r#default=None, sep = "."))]
-fn path(
+#[pyo3(signature = (obj, *args, path=None, r#default=None, sep = "."))]
+fn dig(
     py: Python,
     obj: &Bound<'_, PyAny>,
-    path: &str,
+    args: Bound<'_, PyTuple>,
+    path: Option<&Bound<'_, PyString>>,
     r#default: Option<&Bound<'_, PyAny>>,
     sep: &str,
 ) -> PyResult<PyObject> {
-    let keys = path.split(sep);
-    let mut obj = obj.clone();
-    for key in keys {
-        match obj.getattr(key) {
-            Ok(value) => obj = value,
-            Err(_) => {
-                if let Ok(index) = key.parse::<usize>() {
-                    if let Ok(value) = obj.get_item(index) {
-                        obj = value;
-                        continue;
-                    }
-                } else if let Ok(value) = obj.get_item(key) {
-                    obj = value;
-                    continue;
-                } else if let Some(value) = r#default {
-                    return Ok(value.clone().unbind());
-                } else {
-                    return Ok(py.None());
-                }
-            }
-        }
+    if args.len() > 0 {
+        dig_args(py, obj, args)
+    } else if let Some(path) = path {
+        dig_path(py, obj, path, sep)
+    } else {
+        Ok(py.None())
     }
-    Ok(obj.clone().unbind())
 }
+
+fn dig_path(
+    py: Python,
+    obj: &Bound<'_, PyAny>,
+    path: &Bound<'_, PyString>,
+    sep: &str,
+) -> PyResult<PyObject> {
+    let path = path.to_cow()?;
+
+    if path == "" {
+        return Ok(obj.into_py(py));
+    }
+
+    let keys = path.to_cow().map(|s| {
+        s.split(sep)
+            .try_fold(obj, |acc, key| match acc.getattr(key.into_py(py)) {
+                Ok(value) => ControlFlow::Continue(value),
+                Err(_) => {
+                    if let Ok(index) = key.parse::<usize>() {
+                        if let Ok(value) = acc.get_item(index) {
+                            ControlFlow::Continue(value)
+                        } else {
+                            ControlFlow::Break(py.None())
+                        }
+                    } else if let Ok(value) = acc.get_item(key) {
+                        ControlFlow::Continue(value)
+                    } else {
+                        ControlFlow::Break(acc)
+                    }
+                }
+            })
+    });
+
+    // } else if let Some(value) = r#default {
+    Ok(value.clone().unbind());
+    Ok(py.None())
+}
+
+fn dig_args(py: Python, obj: &Bound<'_, PyAny>, args: Bound<'_, PyTuple>) -> PyResult<PyObject> {
+    Ok(obj.into_py(py))
+}
+
+// #[pyclass]
+// struct DynAttr {
+//     path: Vec<PyObject>,
+// }
+//
+// #[pymethods]
+// impl DynAttr {
+//     #[new]
+//     fn new() -> Self {
+//         DynAttr { path: Vec::new() }
+//     }
+//
+//     fn __getitem__(&mut self, key: PyObject, py: Python) -> PyResult<&DynAttr> {
+//         self.path.push(key.clone_ref(py));
+//         Ok(self)
+//     }
+//
+//     fn __getattr__(&mut self, name: PyObject, py: Python) -> PyResult<&DynAttr> {
+//         self.path.push(name.clone_ref(py));
+//         Ok(self)
+//     }
+//
+//     #[pyo3(signature = (obj, r#default=None))]
+//     fn __call__(
+//         &self,
+//         py: Python,
+//         obj: PyObject,
+//         r#default: Option<&Bound<'_, PyAny>>,
+//     ) -> PyResult<PyObject> {
+//         let mut current = obj.to_object(py);
+//
+//         for part in &self.path {
+//             current = match current {
+//                 obj if obj.is_instance::<PyDict>(py) => {
+//                     let dict = obj.downcast::<PyDict>(py)?;
+//                     dict.get_item(part)
+//                         .map_err(|_| py.new_err(format!("Key '{}' not found", part)))?
+//                         .to_object(py)
+//                 }
+//                 obj if obj.is_instance::<PyList>(py) => {
+//                     let list = obj.downcast::<PyList>(py)?;
+//                     let index = part
+//                         .parse::<usize>()
+//                         .map_err(|_| py.new_err(format!("Invalid index '{}'", part)))?;
+//                     list.get_item(index)
+//                         .map_err(|_| py.new_err(format!("Index '{}' out of range", part)))?
+//                         .to_object(py)
+//                 }
+//                 _ => {
+//                     return Err(py.new_err(format!(
+//                         "Invalid type '{}' for path segment '{}'",
+//                         current.get_type().name(),
+//                         part
+//                     )))
+//                 }
+//             }
+//         }
+//
+//         Ok(current)
+//     }
+// }
+//
+// #[pymodule]
+// fn mylib(_py: Python, m: &PyModule) -> PyResult<()> {
+//     m.add_class::<DynAttr>()?;
+//     Ok(())
+// }
+//
+// fn main() {
+//     Python::with_gil(|py| {
+//         let module = PyModule::new(py, "mylib").unwrap();
+//         mylib(py, &module).unwrap();
+//         module
+//             .add_submodule("dyn_attr", PyModule::new(py, "dyn_attr").unwrap())
+//             .unwrap();
+//     });
+// }
 
 // #[pyfunction]
 // #[pyo3(signature = (obj, path, r#default=None))]
