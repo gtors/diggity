@@ -48,7 +48,7 @@ name = diggity.dig(data, "users", 0, "name")  # Also returns: "Alice"
 # Extracting a non-existing value, returning None
 hobby = diggity.dig_path(data, "users.0.hobby")  # Returns: None
 # Or
-hobby = diggity.dig_path(data, "users", 0, "hobby")  # Also returns: None
+hobby = diggity.dig(data, "users", 0, "hobby")  # Also returns: None
 
 # Providing a default value for a non-existing path
 hobby_with_default = diggity.dig(data, "users", 0, "hobby", default="No hobby specified")  # Returns: "No hobby specified"
