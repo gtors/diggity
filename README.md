@@ -1,7 +1,8 @@
 # Diggity
 
 **Diggity** is a Python library that provides functionality similar to Ruby's `dig` method.
-It allows you to traverse nested data structures to extract values using a specified path or return a default value when the traversal is unsuccessful. 
+It allows you to traverse nested data structures to extract values using a specified path or return a default value when the traversal is unsuccessful.
+
 Additionally, it includes `coalesce` and `coalesce_logical` functions for handling optional values and finding the first non-`None` or truthy value in a sequence.
 
 ## Features
