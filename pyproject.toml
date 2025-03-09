@@ -4,13 +4,42 @@ build-backend = "maturin"
 
 [project]
 name = "diggity"
+description = "A utility library for working with nested objects and handling optional values. Inspired by Ruby `dig` function for safely accessing deeply nested structures"
+license = { file = "LICENSE" }
+readme = "README.md"
+authors = [{ name = "Andrey Torsunov", email = "andrey.torsunov@gmail.com" }]
 requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
 
+[project.urls]
+Homepage = 'https://github.com/gtors/diggity'
+Source = 'https://github.com/gtors/diggity'
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
+
+[dependency-groups]
+dev = ["maturin"]
+testing = [
+    { include-group = "dev" },
+    'hypothesis',
+    'pytest',
+]
+
+[tool.pytest.ini_options]
+testpaths = 'tests'
+log_format = '%(name)s %(levelname)s: %(message)s'
+filterwarnings = [
+    'error',
+    # Python 3.9 and below allowed truncation of float to integers in some
+    # cases, by not making this an error we can test for this behaviour
+    'ignore:(.+)Implicit conversion to integers using __int__ is deprecated',
+]
+xfail_strict = true
+
+[tool.uv]
+package = false
