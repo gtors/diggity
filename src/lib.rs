@@ -9,7 +9,25 @@ use std::ops::ControlFlow;
 #[pymodule]
 fn diggity(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dig, m)?)?;
+    m.add_function(wrap_pyfunction!(coalesce, m)?)?;
+    m.add_function(wrap_pyfunction!(coalesce_logical, m)?)?;
     Ok(())
+}
+
+#[pyfunction]
+#[pyo3(signature = (*args))]
+fn coalesce(args: Bound<'_, PyTuple>) -> PyObject {
+    args.iter()
+        .find(|arg| !arg.is_none())
+        .map_or_else(|| args.py().None(), |arg| arg.unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (*args))]
+fn coalesce_logical(args: Bound<'_, PyTuple>) -> PyObject {
+    args.iter()
+        .find(|arg| arg.is_truthy().unwrap_or(false))
+        .map_or_else(|| args.py().None(), |arg| arg.unbind())
 }
 
 /// Tries to extract the value of nested structs by a specified path.
