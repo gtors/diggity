@@ -6,7 +6,7 @@ Additionally, it includes `coalesce` and `coalesce_logical` functions for handli
 
 ## Features
 - **`dig_path`**: Extract value from nested data structures using dot-separated path.
-- **`dig`**: Extract value from nested data structures using a sequence of keys, indices, or attributes provided via `*args`.
+- **`dig`**: Extract value from nested data structures using a sequence of keys, indices or attributes provided via `*args`.
 - **`coalesce`**: Returns the first non-`None` value from a sequence of arguments.
 - **`coalesce_logical`**: Returns the first truthy value from a sequence of arguments.
 
@@ -53,7 +53,7 @@ hobby = diggity.dig_path(data, "users", 0, "hobby")  # Also returns: None
 hobby_with_default = diggity.dig(data, "users", 0, "hobby", default="No hobby specified")  # Returns: "No hobby specified"
 
 # Using a custom separator
-favorite_language = diggity.dig_path(data, "user:preferences:languages:0", sep=":")  # Returns: "Python"
+favorite_language = diggity.dig_path(data, "users:0:preferences:languages:0", sep=":")  # Returns: "Python"
 ```
 
 ### Handling Optional Values with `coalesce`
