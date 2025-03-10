@@ -1,12 +1,10 @@
-import pytest
-
 from diggity import dig, dig_path, coalesce, coalesce_logical
 
 
 def test_dig():
     # Test nested dictionary
-    data = {"a": {"b": {"c": 42}}}
-    assert dig(data, "a", "b", "c") == 42
+    data = {"a": {"b": [None, None, {"c": 42}]}}
+    assert dig(data, "a", "b", 2, "c") == 42
 
     # Test missing key with default value
     assert dig(data, "a", "x", default=0) == 0
@@ -20,17 +18,17 @@ def test_dig():
 
 def test_dig_path():
     # Test nested dictionary with default separator
-    data = {"a": {"b": {"c": 42}}}
-    assert dig_path(data, "a.b.c") == 42
+    data = [{"a": {"b": {"c": 42}}}]
+    assert dig_path(data, "0.a.b.c") == 42
 
     # Test nested dictionary with custom separator
-    assert dig_path(data, "a/b/c", sep="/") == 42
+    assert dig_path(data, "0/a/b/c", sep="/") == 42
 
     # Test missing path with default value
-    assert dig_path(data, "a.x.y", default=0) == 0
+    assert dig_path(data, "0.a.x.y", default=0) == 0
 
     # Test missing path without default value
-    assert dig_path(data, "a.x.y") is None
+    assert dig_path(data, "0.a.x.y") is None
 
     # Test empty path
     assert dig_path(data, "") == data
@@ -73,10 +71,7 @@ def test_dig_edge_cases():
 
     obj = TestObject()
     assert dig(obj, "a", "b") == 42
-
-    # Test invalid key type
-    with pytest.raises(TypeError):
-        dig({"a": 1}, 123)  # Key should be a string
+    assert dig({"a": 1}, 123) is None
 
 
 def test_dig_path_edge_cases():
@@ -87,10 +82,7 @@ def test_dig_path_edge_cases():
     # Test numeric keys in path
     data = {"a": {0: {"c": 42}}}
     assert dig_path(data, "a.0.c") == 42
-
-    # Test invalid path
-    with pytest.raises(ValueError):
-        dig_path(data, "a.x.y.z")  # Path does not exist
+    assert dig_path(data, "a.x.y.z") is None
 
 
 def test_coalesce_edge_cases():
