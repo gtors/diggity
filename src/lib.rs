@@ -51,7 +51,7 @@ fn diggity(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// ```
 #[pyfunction]
 #[pyo3(signature = (*args))]
-fn coalesce(args: Bound<'_, PyTuple>) -> PyObject {
+fn coalesce(args: Bound<'_, PyTuple>) -> Py<PyAny> {
     args.iter()
         .find(|arg| !arg.is_none())
         .map_or_else(|| args.py().None(), |arg| arg.unbind())
@@ -76,7 +76,7 @@ fn coalesce(args: Bound<'_, PyTuple>) -> PyObject {
 /// ```
 #[pyfunction]
 #[pyo3(signature = (*args))]
-fn coalesce_logical(args: Bound<'_, PyTuple>) -> PyObject {
+fn coalesce_logical(args: Bound<'_, PyTuple>) -> Py<PyAny> {
     args.iter()
         .find(|arg| arg.is_truthy().unwrap_or(false))
         .map_or_else(|| args.py().None(), |arg| arg.unbind())
@@ -109,7 +109,7 @@ fn dig(
     obj: Bound<'_, PyAny>,
     args: &Bound<'_, PyTuple>,
     r#default: Option<&Bound<'_, PyAny>>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let default_value = r#default;
 
     if args.is_empty() {
@@ -117,7 +117,7 @@ fn dig(
     }
 
     let value = args.iter().try_fold(obj, |acc, arg| {
-        if let Ok(key) = arg.downcast::<PyString>() {
+        if let Ok(key) = arg.cast::<PyString>() {
             acc.get_item(key).or_else(|_| acc.getattr(key)).map_or_else(
                 |_| ControlFlow::Break(default_value),
                 |v| ControlFlow::Continue(v),
@@ -162,7 +162,7 @@ fn dig_path(
     path: &str,
     r#default: Option<&Bound<'_, PyAny>>,
     sep: &str,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let default_value = r#default;
 
     if path.is_empty() {
@@ -191,7 +191,7 @@ fn dig_path(
 fn extract_control_flow_value(
     value: ControlFlow<Option<&Bound<'_, PyAny>>, Bound<'_, PyAny>>,
     py: Python<'_>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     match value {
         ControlFlow::Continue(v) => Ok(v.unbind()),
         ControlFlow::Break(v) => Ok(v.into_pyobject(py)?.unbind()),
