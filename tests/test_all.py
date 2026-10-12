@@ -42,7 +42,7 @@ def test_coalesce():
     assert coalesce(None, None, None) is None
 
     # Test with mixed values
-    assert coalesce(None, False, 0, "hello") == False
+    assert coalesce(None, False, 0, "hello") is False
 
     # Test with no arguments
     assert coalesce() is None

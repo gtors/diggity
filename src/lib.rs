@@ -21,8 +21,6 @@ use pyo3::{
     types::{PyAny, PyString, PyTuple},
 };
 
-use std::ops::ControlFlow;
-
 #[pymodule]
 fn diggity(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dig, m)?)?;
@@ -51,7 +49,7 @@ fn diggity(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// ```
 #[pyfunction]
 #[pyo3(signature = (*args))]
-fn coalesce(args: Bound<'_, PyTuple>) -> Py<PyAny> {
+fn coalesce(args: &Bound<'_, PyTuple>) -> Py<PyAny> {
     args.iter()
         .find(|arg| !arg.is_none())
         .map_or_else(|| args.py().None(), |arg| arg.unbind())
@@ -76,10 +74,13 @@ fn coalesce(args: Bound<'_, PyTuple>) -> Py<PyAny> {
 /// ```
 #[pyfunction]
 #[pyo3(signature = (*args))]
-fn coalesce_logical(args: Bound<'_, PyTuple>) -> Py<PyAny> {
-    args.iter()
-        .find(|arg| arg.is_truthy().unwrap_or(false))
-        .map_or_else(|| args.py().None(), |arg| arg.unbind())
+fn coalesce_logical(args: &Bound<'_, PyTuple>) -> Py<PyAny> {
+    for arg in args.iter() {
+        if arg.is_truthy().unwrap_or(false) {
+            return arg.unbind();
+        }
+    }
+    args.py().None()
 }
 
 /// Tries to extract the value from a nested structure
@@ -110,26 +111,26 @@ fn dig(
     args: &Bound<'_, PyTuple>,
     r#default: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
-    let default_value = r#default;
-
     if args.is_empty() {
         return Ok(obj.unbind());
     }
 
-    let value = args.iter().try_fold(obj, |acc, arg| {
-        if let Ok(key) = arg.cast::<PyString>() {
-            acc.get_item(key).or_else(|_| acc.getattr(key)).map_or_else(
-                |_| ControlFlow::Break(default_value),
-                |v| ControlFlow::Continue(v),
-            )
+    let mut current = obj;
+    for arg in args.iter() {
+        let value = if arg.is_instance_of::<PyString>() {
+            let key = arg.cast::<PyString>().unwrap();
+            current.get_item(key).or_else(|_| current.getattr(key))
         } else {
-            acc.get_item(arg).map_or_else(
-                |_| ControlFlow::Break(default_value),
-                |v| ControlFlow::Continue(v),
-            )
+            current.get_item(arg)
+        };
+
+        match value {
+            Ok(v) => current = v,
+            Err(_) => return Ok(r#default.into_pyobject(py)?.unbind()),
         }
-    });
-    extract_control_flow_value(value, py)
+    }
+
+    Ok(current.unbind())
 }
 
 /// Tries to extract the value from a nested structure within an object using a specified path.
@@ -153,7 +154,7 @@ fn dig(
 /// assert dig_path(data, "a.b.0.c") == 42
 /// assert dig_path(data, "a.x.y", default=0) == 0
 /// assert dig_path(data, "a/b/0/c", sep="/") == 42
-/// ``
+/// ```
 #[pyfunction]
 #[pyo3(signature = (obj, path, r#default=None, sep = "."))]
 fn dig_path(
@@ -163,37 +164,26 @@ fn dig_path(
     r#default: Option<&Bound<'_, PyAny>>,
     sep: &str,
 ) -> PyResult<Py<PyAny>> {
-    let default_value = r#default;
-
     if path.is_empty() {
         return Ok(obj.unbind());
     }
 
-    let value = path.split(sep).try_fold(obj, |acc, key| {
-        acc.get_item(key)
-            .or_else(|_| acc.getattr(key))
-            .or_else(|_| {
-                let index = key
-                    .parse::<usize>()
-                    .map_err(|_| PyValueError::new_err(py.None()))?;
-                acc.get_item(index)
-            })
-            .map_or_else(
-                |_| ControlFlow::Break(default_value),
-                |v| ControlFlow::Continue(v),
-            )
-    });
+    let mut current = obj;
+    for key in path.split(sep) {
+        let value = current.get_item(key).or_else(|_| current.getattr(key));
+        let value = value.or_else(|_| {
+            key.parse::<usize>()
+                .map(|i| current.get_item(i).ok())
+                .ok()
+                .flatten()
+                .ok_or_else(|| PyValueError::new_err(""))
+        });
 
-    extract_control_flow_value(value, py)
-}
-
-#[inline]
-fn extract_control_flow_value(
-    value: ControlFlow<Option<&Bound<'_, PyAny>>, Bound<'_, PyAny>>,
-    py: Python<'_>,
-) -> PyResult<Py<PyAny>> {
-    match value {
-        ControlFlow::Continue(v) => Ok(v.unbind()),
-        ControlFlow::Break(v) => Ok(v.into_pyobject(py)?.unbind()),
+        match value {
+            Ok(v) => current = v,
+            Err(_) => return Ok(r#default.into_pyobject(py)?.unbind()),
+        }
     }
+
+    Ok(current.unbind())
 }
