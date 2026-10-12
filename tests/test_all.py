@@ -1,3 +1,5 @@
+import pytest
+
 from diggity import dig, dig_path, coalesce, coalesce_logical
 
 
@@ -99,3 +101,92 @@ def test_coalesce_logical_edge_cases():
 
     # Test with non-truthy values
     assert coalesce_logical(0, "", False, None) is None
+
+
+def test_dig_path_negative_index():
+    data = [{"a": 1}, {"a": 2}, {"a": 3}]
+
+    assert dig_path(data, "-1.a") == 3
+    assert dig_path(data, "-2.a") == 2
+    assert dig_path(data, "0.a") == 1
+
+    # Consistent with `dig`, which has always supported negative indices
+    assert dig_path(data, "-1.a") == dig(data, -1, "a")
+
+    # Out of range falls back to the default
+    assert dig_path(data, "-9.a") is None
+    assert dig_path(data, "-9.a", default="DEF") == "DEF"
+
+
+def test_separator_must_not_be_empty():
+    with pytest.raises(ValueError, match="sep"):
+        dig_path({"a": 1}, "a", sep="")
+
+
+def test_dig_propagates_errors_from_user_code():
+    class Boom:
+        def __getattr__(self, name):
+            raise RuntimeError("boom")
+
+    class BoomItem:
+        def __getitem__(self, key):
+            raise ValueError("boom")
+
+    # A missing key/attribute is still reported via the default value
+    assert dig({"a": 1}, "zzz", default="DEF") == "DEF"
+    assert dig({"a": 1}, "a", "zzz", default="DEF") == "DEF"
+    assert dig([1, 2], "a", default="DEF") == "DEF"
+
+    # ...but genuine errors raised by user code are propagated
+    with pytest.raises(RuntimeError, match="boom"):
+        dig({"a": Boom()}, "a", "x", default="DEF")
+    with pytest.raises(ValueError, match="boom"):
+        dig({"a": BoomItem()}, "a", "x", default="DEF")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        dig_path({"a": Boom()}, "a.x", default="DEF")
+    with pytest.raises(ValueError, match="boom"):
+        dig_path({"a": BoomItem()}, "a.x", default="DEF")
+
+
+def test_fast_paths_preserve_subclass_behaviour():
+    """The non-raising fast paths only apply to exact builtin types."""
+    from collections import defaultdict
+
+    class MyDict(dict):
+        def __missing__(self, key):
+            return "fallback"
+
+    class MyList(list):
+        def __getitem__(self, key):
+            return list.__getitem__(self, key) * 10
+
+    # `__missing__` still runs (an exact dict would have returned the default)
+    assert dig({"a": MyDict()}, "a", "zzz") == "fallback"
+    assert dig_path({"a": MyDict()}, "a.zzz") == "fallback"
+
+    # `defaultdict` behaves like a normal dict
+    dd = defaultdict(int, {"x": 1})
+    assert dig({"a": dd}, "a", "zzz") == 0
+    assert dig({"a": dd}, "a", "x") == 1
+
+    # overridden `__getitem__` still runs
+    assert dig({"a": MyList([1, 2, 3])}, "a", 1) == 20
+    assert dig_path({"a": MyList([1, 2, 3])}, "a.1") == 20
+
+    # attribute fallback is still applied to exact dicts and sequences
+    assert dig_path({"a": 1}, "keys") is not None
+    assert dig([1, 2], "append") is not None
+
+
+def test_fast_paths_preserve_int_keys():
+    # Exact dicts keyed by int must still be reachable through a path segment
+    assert dig_path({"a": {0: {"c": 42}}}, "a.0.c") == 42
+    assert dig_path({0: "intkey", "0": "strkey"}, "0") == "strkey"
+
+    # sequences keep honouring negative indices
+    assert dig_path([{"a": 1}, {"a": 2}], "-1.a") == 2
+    assert dig_path([{"a": 1}, {"a": 2}], "-2.a") == 1
+    assert dig_path((10, 20, 30), "-1") == 30
+    assert dig((10, 20, 30), -1) == 30
+    assert dig_path((10, 20, 30), "5") is None
