@@ -16,32 +16,11 @@
 /// - The `coalesce` and `coalesce_logical` functions are helpful for providing fallback values in cases
 ///   where `None` or falsy values are present.
 use pyo3::{
-    exceptions::{
-        PyAttributeError, PyIndexError, PyKeyError, PyRuntimeError, PyTypeError, PyValueError,
-    },
-    ffi,
+    PyTypeInfo,
+    exceptions::{PyAttributeError, PyIndexError, PyKeyError, PyTypeError, PyValueError},
     prelude::*,
     types::{PyAny, PyDict, PyInt, PyList, PyString, PyTuple},
-    PyTypeInfo,
 };
-
-/// Reports whether `obj` is exactly of type `T` (subclasses do not match).
-///
-/// Fast paths only apply to exact builtin types: for subclasses, custom
-/// `__getitem__`/`__missing__`/`__getattr__` implementations must keep running,
-/// so those go through the generic (exception-driven) path instead.
-#[inline]
-fn is_exact<T: PyTypeInfo>(py: Python<'_>, obj: &Bound<'_, PyAny>) -> bool {
-    let ty = unsafe { ffi::Py_TYPE(obj.as_ptr()) };
-    ty == T::type_object_raw(py)
-}
-
-/// Extracts the pending exception, falling back to a `RuntimeError` if the
-/// error state was unexpectedly empty.
-#[cold]
-fn take_err(py: Python<'_>) -> PyErr {
-    PyErr::take(py).unwrap_or_else(|| PyRuntimeError::new_err("Python error state was not set"))
-}
 
 /// Reports whether an error raised during a lookup step merely means that the
 /// requested key/attribute does not exist.
@@ -54,7 +33,7 @@ fn is_missing(py: Python<'_>, err: &PyErr) -> bool {
     // Fast path: the four builtin types cover virtually every real miss. The
     // type objects are statically cached by PyO3, so this is a few pointer
     // compares instead of up to four `PyErr_GivenExceptionMatches` walks.
-    let ty = err.get_type(py).as_ptr() as *mut ffi::PyTypeObject;
+    let ty = err.get_type(py).as_ptr() as *mut pyo3::ffi::PyTypeObject;
     if ty == PyKeyError::type_object_raw(py)
         || ty == PyIndexError::type_object_raw(py)
         || ty == PyAttributeError::type_object_raw(py)
@@ -70,63 +49,44 @@ fn is_missing(py: Python<'_>, err: &PyErr) -> bool {
         || err.is_instance_of::<PyTypeError>(py)
 }
 
-/// Reads `dict[key]` without raising on a miss.
-#[inline]
-fn dict_get_item<'py>(
-    py: Python<'py>,
-    dict: &Bound<'py, PyAny>,
-    key: &Bound<'py, PyAny>,
-) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let item = unsafe { ffi::PyDict_GetItemWithError(dict.as_ptr(), key.as_ptr()) };
-    if item.is_null() {
-        // NULL without a pending exception simply means "key not present".
-        if unsafe { ffi::PyErr_Occurred() }.is_null() {
-            return Ok(None);
-        }
-        return Err(take_err(py));
-    }
-    Ok(Some(unsafe { Bound::from_borrowed_ptr(py, item) }))
+/// Outcome of a fast-path lookup into an exact `list` or `tuple`.
+enum SeqLookup<'py> {
+    /// The element was found.
+    Found(Bound<'py, PyAny>),
+    /// The object is an exact list/tuple, but the index is out of range.
+    OutOfRange,
+    /// The object is not an exact list/tuple, so the fast path does not apply.
+    NotASequence,
 }
 
 /// Reads `seq[index]` from an exact `list` or `tuple` without raising.
 ///
 /// Negative indices are resolved against the length, matching Python semantics.
-/// Out-of-range indices yield `Ok(None)` rather than raising `IndexError`.
-fn sequence_get_item<'py>(
-    py: Python<'py>,
-    seq: &Bound<'py, PyAny>,
-    index: isize,
-) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let is_list = is_exact::<PyList>(py, seq);
-    let len = if is_list {
-        unsafe { ffi::PyList_GET_SIZE(seq.as_ptr()) }
-    } else {
-        unsafe { ffi::PyTuple_GET_SIZE(seq.as_ptr()) }
-    };
-
-    let index = if index < 0 {
-        index + len as isize
-    } else {
-        index
-    };
-    if index < 0 || index >= len as isize {
-        return Ok(None);
-    }
-
-    let index = index as ffi::Py_ssize_t;
-    let item = unsafe {
-        if is_list {
-            ffi::PyList_GetItem(seq.as_ptr(), index)
-        } else {
-            ffi::PyTuple_GetItem(seq.as_ptr(), index)
+/// Out-of-range indices are reported as [`SeqLookup::OutOfRange`] rather than
+/// raising `IndexError`.
+///
+/// Only exact builtin types take this path: a subclass may override
+/// `__getitem__`, and that override must keep running.
+fn sequence_get_item<'py>(seq: &Bound<'py, PyAny>, index: isize) -> PyResult<SeqLookup<'py>> {
+    if let Ok(list) = seq.cast_exact::<PyList>() {
+        let len = list.len() as isize;
+        let index = if index < 0 { index + len } else { index };
+        if index < 0 || index >= len {
+            return Ok(SeqLookup::OutOfRange);
         }
-    };
-
-    if item.is_null() {
-        // Unreachable for an exact list/tuple with an in-range index.
-        return Err(take_err(py));
+        return Ok(SeqLookup::Found(list.get_item(index as usize)?));
     }
-    Ok(Some(unsafe { Bound::from_borrowed_ptr(py, item) }))
+
+    if let Ok(tuple) = seq.cast_exact::<PyTuple>() {
+        let len = tuple.len() as isize;
+        let index = if index < 0 { index + len } else { index };
+        if index < 0 || index >= len {
+            return Ok(SeqLookup::OutOfRange);
+        }
+        return Ok(SeqLookup::Found(tuple.get_item(index as usize)?));
+    }
+
+    Ok(SeqLookup::NotASequence)
 }
 
 /// Performs a single traversal step.
@@ -142,18 +102,22 @@ fn lookup<'py>(
     // Fast path: an integer key on an exact list/tuple. Saves raising (and
     // formatting the message of) an `IndexError` on every miss.
     if key.is_instance_of::<PyInt>()
-        && (is_exact::<PyList>(py, obj) || is_exact::<PyTuple>(py, obj))
+        && let Ok(index) = key.extract::<isize>()
     {
-        if let Ok(index) = key.extract::<isize>() {
-            return sequence_get_item(py, obj, index);
+        match sequence_get_item(obj, index)? {
+            SeqLookup::Found(value) => return Ok(Some(value)),
+            SeqLookup::OutOfRange => return Ok(None),
+            SeqLookup::NotASequence => {}
         }
     }
 
     // Fast path: a string key on an exact dict. Saves raising a `KeyError` on
     // every miss; the attribute fallback below still runs to keep `dig(d, "keys")`
     // resolving `dict.keys` as it always has.
-    if is_exact::<PyDict>(py, obj) && key.is_instance_of::<PyString>() {
-        if let Some(value) = dict_get_item(py, obj, key)? {
+    if key.is_instance_of::<PyString>()
+        && let Ok(dict) = obj.cast_exact::<PyDict>()
+    {
+        if let Some(value) = dict.get_item(key)? {
             return Ok(Some(value));
         }
         return lookup_attribute(obj, py, key);
@@ -205,9 +169,11 @@ fn lookup_segment<'py>(
     // hottest case and it previously cost two raised exceptions (a `TypeError`
     // from `get_item`, then an `AttributeError` from `getattr`) before the
     // integer fallback could even be attempted.
-    if is_exact::<PyList>(py, obj) || is_exact::<PyTuple>(py, obj) {
-        if let Ok(index) = segment.parse::<isize>() {
-            return sequence_get_item(py, obj, index);
+    if let Ok(index) = segment.parse::<isize>() {
+        match sequence_get_item(obj, index)? {
+            SeqLookup::Found(value) => return Ok(Some(value)),
+            SeqLookup::OutOfRange => return Ok(None),
+            SeqLookup::NotASequence => {}
         }
     }
 
@@ -216,8 +182,8 @@ fn lookup_segment<'py>(
     // Fast path: exact dict. Both the item and the attribute lookup are tried
     // without raising a `KeyError`; a numeric segment then falls through to the
     // integer index below so that dicts keyed by `int` keep working.
-    if is_exact::<PyDict>(py, obj) {
-        if let Some(value) = dict_get_item(py, obj, &key)? {
+    if let Ok(dict) = obj.cast_exact::<PyDict>() {
+        if let Some(value) = dict.get_item(&key)? {
             return Ok(Some(value));
         }
         if let Some(value) = lookup_attribute(obj, py, &key)? {

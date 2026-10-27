@@ -72,12 +72,54 @@ jobs:
           name: wheels-windows-${{ matrix.platform.target }}
           path: dist
 
+  linux-freethreaded:
+    name: wheels linux freethreaded
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # Free-threaded CPython. PyO3 only supports it from 3.14 onwards.
+          python-version: '3.15t'
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          args: --release --out dist --find-interpreter
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          manylinux: auto
+      - name: Verify free-threaded wheel
+        run: |
+          ls -l dist
+          if ! ls dist/*cp315t* >/dev/null 2>&1; then
+            echo "::error::expected a cp315t (free-threaded) wheel, got something else"
+            exit 1
+          fi
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-freethreaded
+          path: dist
+
   pytest:
     name: test ${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
+        python-version:
+          - '3.9'
+          - '3.10'
+          - '3.11'
+          - '3.12'
+          - '3.13'
+          - '3.14'
+          - '3.15'
+          # Free-threaded CPython (PyO3 supports it from 3.14 onwards).
+          - '3.14t'
+          - '3.15t'
+          # PyPy.
+          - 'pypy-3.11'
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -95,11 +137,18 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install deps
         run: uv sync --group testing
+        env:
+          # Pin the interpreter so that free-threaded and PyPy builds are used
+          # instead of the default CPython.
+          UV_PYTHON: ${{ matrix.python-version }}
       - run: uv pip install -e .
         env:
           RUST_BACKTRACE: 1
+          UV_PYTHON: ${{ matrix.python-version }}
       - run: uv pip freeze
       - run: uv run pytest
+        env:
+          UV_PYTHON: ${{ matrix.python-version }}
 
   sdist:
     runs-on: ubuntu-latest
@@ -122,7 +171,7 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     if: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
-    needs: [linux, windows, pytest, sdist]
+    needs: [linux, linux-freethreaded, windows, pytest, sdist]
     permissions:
       id-token: write
       contents: write

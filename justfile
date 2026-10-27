@@ -1,8 +1,16 @@
 # Diggity — Rust + Python (PyO3) library
 #
 # Common tasks: `just --list`
+#
+# Notes:
+#   * The project is not managed by uv (`[tool.uv] package = false`), so the
+#     extension has to be installed separately: `uv pip install -e .`.
+#   * `uv sync` uninstalls anything it does not manage, hence `--inexact` in
+#     the `deps` recipe — otherwise it removes the built extension.
+#   * The editable install is a *copy* of the compiled extension, so it has to
+#     be rebuilt whenever the Rust sources change. That is why `test` depends
+#     on `build`.
 
-python := "uv run"
 out_dir := "dist"
 
 # List available recipes
@@ -11,15 +19,11 @@ default:
 
 # Install dev + testing dependencies
 deps:
-    uv sync --group testing
+    uv sync --inexact --group testing
 
-# Build and install the extension in editable mode
-build:
+# Build the extension and install it into the active environment
+build: deps
     uv pip install -e .
-
-# Build the extension in debug mode
-build-debug:
-    uv run maturin develop
 
 # Build release wheels into dist/
 build-release:
@@ -29,17 +33,13 @@ build-release:
 build-sdist:
     uv run maturin sdist --out {{out_dir}}
 
-# Install the project in editable mode
-install:
-    uv pip install -e .
-
 # Run the test suite
-test *args:
-    uv run rtk pytest {{args}}
+test *args: build
+    uv run --no-sync pytest {{args}}
 
 # Run the test suite with coverage
-test-cov *args:
-    uv run rtk pytest --cov=diggity --cov-report=term-missing {{args}}
+test-cov *args: build
+    uv run --no-sync pytest --cov=diggity --cov-report=term-missing {{args}}
 
 # Run Rust unit tests
 test-rust:
@@ -56,8 +56,8 @@ fmt-rust:
 
 # Format Python code with ruff
 fmt-python:
-    uvx ruff format src tests
-    uvx ruff check --fix src tests
+    uv run ruff format src tests
+    uv run ruff check --fix src tests
 
 # Run all linters
 lint: lint-rust fmt-python

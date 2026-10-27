@@ -1,6 +1,5 @@
 import pytest
-
-from diggity import dig, dig_path, coalesce, coalesce_logical
+from diggity import coalesce, coalesce_logical, dig, dig_path
 
 
 def test_dig():
